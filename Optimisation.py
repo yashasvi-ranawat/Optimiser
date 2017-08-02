@@ -6,14 +6,16 @@ import sys,os,copy,random,datetime, math
 class Optim:
     '''
     Generates object with a population set and all data.
-    Input: <input data file name>,[<Type of algorithm, default="GeneticAl">], [<Size of population, default=500>]
+    Input: <input data file name>,
+            [<Type of algorithm, default="GeneticAl">], 
+            [<Size of population, default=500 for GeneticAl and No. of dim +1 for Simplex>]
     Attributes:
-    init
+    InitPop
     '''
     
-    algo_list=["GeneticAl","Simplex"])
+    algo_list=["GeneticAl","Simplex"]
     
-    def __init__(self,data_file,algo="GeneticAl",N_pop=500):
+    def __init__(self,data_file,algo="GeneticAl",N_pop=None):
         
         self.algo=algo
         
@@ -27,22 +29,24 @@ class Optim:
         self.N_elite=0
         ind_elite=len(data_) #index where elite starts, put to end of file if only Input
         for i in range(len(data_)):
-            if data_[i].srtip().lower().startswith('elite'):
+            if data_[i].strip().lower().startswith('elite'):
                 self.N_elite=int(data_[i].split()[1])
                 ind_elite=i
                 break
-        self.N_pop=N_pop
         self.input_=data_[:ind_elite]
         for i in range(len(self.input_)):
-            if self.input_[i].srtip().lower().startswith('d'):
+            if self.input_[i].strip().lower().startswith('d'):
                 ind_dim=i
-            if self.input_[i].srtip().lower().startswith('o'):
+            if self.input_[i].strip().lower().startswith('o'):
                 ind_obj=i
         self.N_dim=int(self.input_[ind_dim].split()[1])
         self.N_obj=int(self.input_[ind_obj].split()[1])
         
         if self.algo == self.algo_list[1]: #for Simplex
             self.N_pop=self.N_dim +1
+        if self.algo == self.algo_list[0]: #for GeneticAl
+            if N_pop is None: N_pop=500 #Default
+            self.N_pop=N_pop
         
         #Reading input
         print (" Reading input")
@@ -52,6 +56,8 @@ class Optim:
             self.P_dim[:]=np.array([list(map(float,x.split()[:3])) for x in self.input_[ind_dim+1:ind_dim+self.N_dim+1]])
             
             # parameters for Objective: <Type> <Target> <Margin> <Tier>
+            #Type = -1,1,0 for min, max, target respectively
+            #Target= target value, else 0 for max and min type
             P_obj=np.zeros((self.N_obj,4))
             for i in range(self.N_obj):
                 line=self.input_[ind_obj+1+i].split()
@@ -80,7 +86,7 @@ class Optim:
             #Removing duplicates
             indx=1
             while indx < self.N_elite:
-                if self.exist(self.pop[indx],range(indx)):
+                if self.Exist(self.pop[indx],range(indx)):
                     self.pop[indx][:]=self.pop[self.N_elite-1]
                     self.N_elite-=1
                 else:
@@ -93,22 +99,22 @@ class Optim:
         #    self.N_elite=self.N_pop
         
         print (" Completing generation of random initial population")
-        self.init_pop(range(self.N_elite,self.N_pop))
+        self.InitPop(range(self.N_elite,self.N_pop))
         
         print (" Calculating objectives")
-        self.calc_obj(indx=range(self.N_elite,self.N_pop))
+        self.CalcObjMulti(range(self.N_elite,self.N_pop))
         
         print (" Ranking population")
-        #self.rank_pop()
+        self.RankPop()
         
         #Update N_elite, if GeneticAl
-        #if self.algo == self.algo_list[0];
-        #    self.update_elite()
+        if self.algo == self.algo_list[0]:
+            self.UpdateElite()
         
         print (" Saving Elite")
-        #self.save_things()
+        self.SaveThings()
         
-    def init_pop(self,indx=None):
+    def InitPop(self,indx=None):
         '''
         Initialises population for index (list) provided
         If nothing is passed, entire population is initialised
@@ -117,107 +123,154 @@ class Optim:
         for i in indx:
             max_loop=200
             for loop in range(max_loop):
-                hold=np.array([ (random.uniform(self.P_dim[j][0],self.P_dim[j][1]) if self.P_dim[j][2]==0 else self.P_dim[j][0]+self.P_dim[j][2]*random.randint(0,int((self.P_dim[j][1]-self.P_dim[j][0])/float(self.P_dim[j][2])))) for j in range(self.N_dim)])
+                hold=np.array([ (random.uniform(self.P_dim[j][0],self.P_dim[j][1]) if self.P_dim[j][2]==0 else self.P_dim[j][0]+self.P_dim[j][2]*random.randint(0,divmod(self.P_dim[j][1]-self.P_dim[j][0],self.P_dim[j][2])[0])) for j in range(self.N_dim)])
                 # Check if hold exists in self.pop, excluding, itself and all indx not initialised yet
-                if not self.exist(hold,list(set(range(self.N_pop))-set(indx[indx.index(i):]))):
+                if not self.Exist(hold,list(set(range(self.N_pop))-set(indx[indx.index(i):]))):
                     self.pop[i][:self.N_dim]=hold
                     break
             if loop == max_loop-1:
                 raise RuntimeError(" Houston we got a problem: It seems the Dimension requirements don't allow random {0} population easily".format(self.N_pop))
           
-    def calc_obj(self,param=None,indx=None):
+    def CalcObjMulti(self,indx=None):
         '''
-        Calculates objective for passed parameter or self.pop for index provided
-        param
-            numpy array of size of dimension (or population set starting with dimensions)
+        Calculates objective for self.pop for index provided
+        argument:
         indx, default= range(<Total population count>)
             list of indixes of population to calculate objective for
-        Note: Sort the population on rank after implementation, if appropriate; <>.rank_pop()
+        Note: rank the population after implementation; <>.RankPop()
+        '''
+        if indx is None: indx=range(self.N_pop)
+        for i in indx:
+            self.pop[i]=self.CalcObj(self.pop[i])
+            #if not ranked, N_elite is trivial, updated to save all CalcObj calculated population
+            if not self.ranked:
+                self.N_elite=i+1
+            #Population not ranked since it is used for initialisation; population with objective missing exist
+            #self.RankPop()
+            self.SaveThings()
+
+    def CalcObj(self,param):
+        '''
+        Calculates objective for passed parameter
+        arguments:
+            numpy array of size of dimension (or population set starting with dimensions)
+        Note: To make your own custom function:
+        1. define the function which takes in a numpy array of size (<>.N_dim+<>.N_obj,)
+        Use the first <>.N_dim indices to give <>.N_obj
+        and pass numpy array of size (<>.N_dim+<>.N_obj,)
+        This way, all other functions can access it.
+        2. <>.CalcObj=<Custom Function>
         '''
         try:
-            if param is None:
-                if indx is None: indx=range(self.N_pop)
-                for i in indx:
-                    if os.path.isfile('STOP'): sys.exit() #Failsafe
-                    out=sb.run(['./run.sh']+list(map(str,self.pop[i][:self.N_dim])),stdout=sb.PIPE).stdout.decode('utf-8')
-                    self.pop[i][-1*self.N_obj:]=np.array(list(map(float,out.split())))
-                    #if not ranked, N_elite is trivial, updated to save all calc_obj calculated population
-                    if not self.ranked:
-                        self.N_elite=i+1
-                    self.save_things()
-                            
-            else:
-                if param.size < self.N_dim:
-                    print ("Input numpy array size < N_dim(={0})".format(self.N_dim))
-                    return None
-                out=sb.run(['./run.sh']+(list(map(str,param[:self.N_dim]))),stdout=sb.PIPE).stdout.decode('utf-8')
-                param_out=np.zeros(self.N_dim+self.N_obj)
-                param_out[:self.N_dim]=param[:self.N_dim]
-                param_out[-1*self.N_obj:]=np.array(list(map(float,out.split())))
-                return param_out
-        except ValueError as error:
-            with open("Calc_error.log",'a') as f:
-                f.write('## '+str(datetime.datetime.now())+'\n')
-                f.write("Input:"+"\n"+" ".join(list(map(str,param.tolist())))+"\n")
-                f.write("Output:"+"\n"+out+"\n")
-            raise ValueError("::Error in calc_obj; check Calc_error.log::"+error.args[0])
-    '''
-
-    def calc_obj(self,param):
-        try:
             if param.size < self.N_dim:
-                print ("Input numpy array size < N_dim(={0})".format(self.N_dim))
-                return None
+                raise ValueError("Input numpy array size < N_dim(={0})".format(self.N_dim))
             out=sb.run(['./run.sh']+(list(map(str,param[:self.N_dim]))),stdout=sb.PIPE).stdout.decode('utf-8')
             param_out=np.zeros(self.N_dim+self.N_obj)
             param_out[:self.N_dim]=param[:self.N_dim]
-            param_out[-1*self.N_obj:]=np.array(list(map(float,out.split())))
+            hold=np.array(list(map(float,out.split())))
+            #Changing target based objective to abs(error)
+            for j in range(self.N_obj):
+                #if <Type> ==0, replace obj with abs(obj-<Target>)
+                if self.P_obj[j][0]==0:
+                    hold[j]=abs(hold[j]-self.P_obj[j][1])
+            param_out[-1*self.N_obj:]=hold
             return param_out
         except ValueError as error:
             with open("Calc_error.log",'a') as f:
                 f.write('## '+str(datetime.datetime.now())+'\n')
-                f.write("Input:"+"\n"+" ".join(list(map(str,param.tolist())))+"\n")
+                f.write("Input:"+"\n"+" ".join(list(map(str,param[:self.N_dim].tolist())))+"\n")
                 f.write("Output:"+"\n"+out+"\n")
-            raise ValueError("::Error in calc_obj; check Calc_error.log::"+error.args[0])
-    '''
-
-    def rank_pop(self,param=None):
+            raise ValueError("::Error in CalcObj; check Calc_error.log::"+error.args[0])
+    
+    def SuperiourityOrderIs(self,param1=None,param2=None):
+        '''
+        Based on objective requirements
+        Returns True if param1 is superiour than param2
+                False if param1 is not superiour than param2 (i.e. param2 is superiour or equal to param1)
+        Uses hard ranking (Pareto method), i.e. ALL (not maximum) objectives for same tier should be superiour
+        '''
+        if param1 is None and param2 is None:
+            raise TypeError("swapped takes 2 arguments")
+        elif param1.size != self.N_dim+self.N_obj and param2.size != self.N_dim+self.N_obj:
+            raise ValueError("param1 and param2 should be numpy array of size {0}, but {1} and {2} were given,respectively".format(self.N_dim+self.N_obj,param1.size,param2.size))
         #getting tiers with indices
         tier={}
         for i in range(self.N_obj):
-            tier[self.P_obj[i]]=tier.get(self.P_obj[i],[])+[i]
+            tier[self.P_obj[i][3]]=tier.get(self.P_obj[i][3],[])+[i]
         tier_list=list(tier.keys())
         tier_list.sort()
-        swap=False
+        obj1=param1[-1*self.N_obj:]
+        obj2=param2[-1*self.N_obj:]
+        for i in tier_list:
+            #for each tier list, we use hard ranking (Pareto method), i.e. ALL (not maximum) objectives in same tier should be superiour 
+            x=0
+            for j in tier[i]:
+                #if obj1's j th objective is not superiour to obj2's, then break
+                if not (obj1[j]-obj2[j])*(-1 if self.P_obj[j][0]==-1 else 1) < self.P_obj[j][2]: 
+                    break
+                x+=1
+            if x==len(tier[i]): return True #if the loop above didn't break prematurely, then obj1 is superiour
+            #Now obj2 is either equal or superiour to obj1
+            #Checking if obj1 is equal to obj2, only then heading to tier below
+            x=0
+            for j in tier[i]:
+                #if obj2's j th objective is not superiour to obj1's, then break
+                if not (obj2[j]-obj1[j])*(-1 if self.P_obj[j][0]==-1 else 1) < self.P_obj[j][2]: 
+                    break
+                x+=1
+            if x==len(tier[i]): return False #if the loop above didn't break prematurely, then obj2 is superiour
+            #Now obj1 is equal to obj2
+            #Heading to tier below
+        #Now, all tiers are checked and obj1 is still equal to obj2
+        return False
+
+    def RankPop(self,param=None):
+        '''
+        Ranks parameters provided, if none, then ranks entire population
+        '''
         #if nothing is passed to function, then rank whole population and return nothing
         if param is None: 
             param=np.zeros((self.N_pop,self.N_dim+self.N_obj))
             param[:]=self.pop
             return_=False
-        else: #else return param and swap
+        else: #else return param
             return_=True
         
+        #Making a list of indices for easy ranking
+        #The indices will be ranked, rather than the whole numpy array
+        #Then the new numpy array will be shuffled on this
+        rank_arg=list(range(param.shape[0]))
         
+        for i in range(1,param.shape[0]):
+            for j in range(i):
+                #if i'th pop is superior than j'th pop, then insert i'th index at j position 
+                if self.SuperiourityOrderIs(self.pop[i],self.pop[rank_arg[j]]):
+                    rank_arg.insert(j,rank_arg.pop(i))
+                    break
         
-        if not self.ranked: self.ranked=True
         if return_:
-            return param,swap
+            #Making ranked param
+            param_ranked=np.zeros(param.shape)
+            for i in range(param.shape[0]):
+                param_ranked[i]=param[rank_arg[i]]
+            return param_ranked
         else:
-            self.pop[:]=param
+            if not self.ranked: self.ranked=True
+            for i in range(param.shape[0]):
+                self.pop[i]=param[rank_arg[i]]
         
-    def update_elite():
+    def UpdateElite(self):
         '''
         Updates N_elite to count of first pareto
         '''
         param=np.zeros((2,self.N_dim+self.N_obj))
         for i in range(1,self.N_pop):
-            param[2]=self.pop[i-1]
-            param[1]=self.pop[i]
-            if self.rank_pop(param)[1]:
+            #if [i-1] is clear superiour than [i], then index of last elite is i-1; hence No. of elites=i
+            if self.SuperiourityOrderIs(self.pop[i-1],self.pop[i]):
                 self.N_elite=i
                 return None
     
-    def simplex_crawl(self,iter_=1,alpha=1,gamma=2,rho=0.5,sigma=0.5):
+    def SimplexCrawl(self,iter_=1,alpha=1,gamma=2,rho=0.5,sigma=0.5):
         '''
         Makes the simplex crawl using Nelder–Mead method
         Parameters passed: 
@@ -227,11 +280,12 @@ class Optim:
         rho, default=0.5, contraction coefficients
         sigma, default=0.5, shrink coefficients
         
-        check: https://en.wikipedia.org/wiki/Nelder-Mead_method
-        for algorithm and standard coefficient values
+        Refrences:
+        https://en.wikipedia.org/wiki/Nelder-Mead_method
+        McKinnon, K.I.M. "Convergence of the Nelder–Mead simplex method to a non-stationary point". SIAM J Optimization
         '''
         if self.algo !=self.algo_list[1]:
-            raise RuntimeError("{0} algorithm does not work with method: simplex_crawl".format(self.algo))
+            raise RuntimeError("{0} algorithm does not work with method: SimplexCrawl".format(self.algo))
         #Asserting proper parameters
         assert alpha>0,"alpha > 0, given alpha={0}".format(alpha)
         assert gamma>1,"gamma > 1, given gamma={0}".format(gamma)
@@ -244,106 +298,132 @@ class Optim:
         contraction=np.zeros(self.N_dim+self.N_obj)
         param=np.zeros((2,self.N_dim+self.N_obj)) #for comparing
         
-        for _ in range(iter):
-            centroid[:]=np.sum(self.pop[:-1],axis=0)
+        for ii in range(iter_):
+            if os.path.isfile('STOP'): sys.exit() #Failsafe
+            centroid[:]=np.sum(self.pop[:-1],axis=0)/(self.N_pop-1)
             #Initialising required points
-            for x in range(self.N_dim):
-                #reflection point
-                hold=centroid[x]+alpha*(centroid[x]-self.pop[-1][x])
-                #modelling to Dimension requirements
-                if self.P_dim[x][2] != 0:
-                    hold=round((hold-self.P_dim[x][0])/self.P_dim[x][2])*self.P_dim[x]+self.P_dim[x][0]
-                reflection[x]=hold
-                #expansion point
-                hold=centroid[x]+gamma*(reflection[x]-centroid[x])
-                #modelling to Dimension requirements
-                if self.P_dim[x][2] != 0:
-                    hold=round((hold-self.P_dim[x][0])/self.P_dim[x][2])*self.P_dim[x]+self.P_dim[x][0]
-                expansion[x]=hold
-                #contraction point
-                hold=centroid[x]+rho*(self.pop[-1][x]-centroid[x])
-                #modelling to Dimension requirements
-                if self.P_dim[x][2] != 0:
-                    hold=round((hold-self.P_dim[x][0])/self.P_dim[x][2])*self.P_dim[x]+self.P_dim[x][0]
-                contraction[x]=hold
+            #reflection point, modelled to Dimension requirements
+            reflection=self.RoundToDim(centroid+alpha*(centroid-self.pop[-1]))
             
-            #Calculating corresponding point
-            reflection[:]=self.calc_obj(reflection)
-
-            param[0]=self.pop[0]
-            param[1]=reflection
-            if self.rank_pop(param)[1]: #reflection is best, testing expansion
-                #Calculating corresponding point
-                expansion[:]=self.calc_obj(expansion)
+            #Calculating objective for corresponding point
+            reflection[:]=self.CalcObj(reflection)
+            #print ("reflection:{0}".format(reflection))
+            
+            if not self.SuperiourityOrderIs(self.pop[0],reflection): #reflection is better or equal to rank 0, testing expansion
+                #expansion point, modelled to Dimension requirements
+                expansion=self.RoundToDim(centroid+gamma*(reflection-centroid))
+                #Calculating objective for corresponding point
+                expansion[:]=self.CalcObj(expansion)
+                #print ("expansion:{0}".format(expansion))
                 
-                param[0]=reflection
-                param[1]=expansion
-                if self.rank_pop(param)[1]: #Expansion usefull
-                    self.pop[-1]=expansion
+                if not self.SuperiourityOrderIs(self.pop[0],expansion): #Expansion usefull
+                    #Take expansion to best rank 0, so the simplex can crawl on plateaus
+                    self.pop[-1]=self.pop[0] #Ranking at end will take care
+                    self.pop[0]=expansion
                 
                 else: #reflection usefull
-                    self.pop[-1]=reflection
+                    #Take reflection to best rank 0, so the simplex can crawl on plateaus
+                    self.pop[-1]=self.pop[0] #Ranking at end will take care
+                    self.pop[0]=reflection
                 
             else: #reflection is not best, checking if reflection is useful
             
-                param[0]=self.pop[-2]
-                param[1]=reflection
-                if self.rank_pop(param)[1]: #reflection usefull
+                if self.SuperiourityOrderIs(reflection,self.pop[-2]): #reflection usefull
                     self.pop[-1]=reflection
                     
                 else: #reflection not usefull, testing contraction
-                    #Calculating corresponding point
-                    contraction[:]=self.calc_obj(contraction)
-                    
-                    param[0]=self.pop[-1]
-                    param[1]=contraction
-                    if self.rank_pop(param)[1]: #Contraction usefull
-                        self.pop[-1]=contraction
-                        
-                    else: #contraction not useful, shrinking
-                        for i in range(1,self.N_pop):
-                            self.pop[i]+=sigma*(self.pop[0]-self.pop[i])
-        self.save_things()
                 
+                    if self.SuperiourityOrderIs(reflection,self.pop[-1]): #Outside Contraction case
+                        
+                        #contraction point, modelled to Dimension requirements
+                        contraction=self.RoundToDim(centroid+rho*(centroid-self.pop[-1]))
+                        #Calculating objective for corresponding point
+                        contraction[:]=self.CalcObj(contraction)
+                        #print ("out contraction:{0}".format(contraction))
+                        
+                        if not self.SuperiourityOrderIs(reflection,contraction): #Contraction usefull
+                            self.pop[-1]=contraction
+                            
+                        else: #contraction not useful, shrinking
+                            for i in range(1,self.N_pop):
+                                self.pop[i]+=sigma*(self.pop[0]-self.pop[i])
+                            self.CalcObjMulti(range(1,self.N_pop))
+                            #print("shrink")
+                                
+                    else: #Inside contraction case
+                    
+                        #contraction point, modelled to Dimension requirements
+                        contraction=self.RoundToDim(centroid+rho*(self.pop[-1]-centroid))
+                        #Calculating objective for corresponding point
+                        contraction[:]=self.CalcObj(contraction)
+                        #print ("in contraction:{0}".format(contraction))
+                        
+                        if self.SuperiourityOrderIs(contraction,self.pop[-1]): #Contraction usefull
+                            self.pop[-1]=contraction
+                            
+                        else: #contraction not useful, shrinking
+                            for i in range(1,self.N_pop):
+                                self.pop[i]+=sigma*(self.pop[0]-self.pop[i])
+                            self.CalcObjMulti(range(1,self.N_pop))
+                            #print("shrink")
+                                
+            #Ranking and saving
+            self.RankPop()
+            self.SaveThings()
+    
+    def RoundToDim(self,param=None):
+        '''
+        Rounds the dimenions of given param to dimension requirements, while also limiting to required space
+        Also, the returned parameter has all objectives reinitialised to zero
+        '''
+        if param is None:
+            raise TypeError("Takes one parameter")
+        elif param.size < self.N_dim:
+            raise ValueError("size of parameter less than N_dim (= {0})".format(self.N_dim))
+        for i in range(self.N_dim):
+            #Checking if not lower than min
+            param[i]=max(self.P_dim[i][0],param[i])
+            #Checking if not higher than max
+            param[i]=min(self.P_dim[i][1],param[i])
+            #modelling to Dimension requirements
+            if self.P_dim[i][2] != 0:
+                param[i]=round((param[i]-self.P_dim[i][0])/self.P_dim[i][2])*self.P_dim[i][2]+self.P_dim[i][0]
+        param_out=np.zeros(self.N_dim+self.N_obj)
+        param_out[:self.N_dim]=param[:self.N_dim]
+        return param_out
+            
         
-    def mutate(self,iter_=1):
+    def Mutate(self,iter_=1):
         if self.N_pop<2:
             raise ValueError("Number of population (={0}) not enough to choose two parents".format(self.N_pop))
-        parent=[0]*2
-        for _ in range(iter):
+        parent=[0,0]
+        for ii in range(iter_):
+            if os.path.isfile('STOP'): sys.exit() #Failsafe
             #Searching for two random unidentical parents
             while True:
-                parent[0]=int((1-np.power(np.random.random(),1/2.5))*(self.N_pop-1)
-                parent[1]=int((1-np.power(np.random.random(),1/2.5))*(self.N_pop-1)
+                parent[0]=int((1-np.power(np.random.random(),1/2.5))*(self.N_pop-1))
+                parent[1]=int((1-np.power(np.random.random(),1/2.5))*(self.N_pop-1))
                 if parent[0] != parent[1]:
                     parent.sort
                     break
-            #making a numpy array to hold both parents and offspring for ranking
-            param=np.zeros((3,self.N_dim+self.N_obj))
-            param[0]=self.pop[parent[0]]
-            param[1]=self.pop[parent[1]]
-            #offspring
-            for x in range(self.N_dim):
-                hold=param[0][x]+np.random.random()*(param[1][x]-param[0][x])
-                #modelling to Dimension requirements
-                if self.P_dim[x][2] != 0:
-                    hold=round((hold-self.P_dim[x][0])/self.P_dim[x][2])*self.P_dim[x]+self.P_dim[x][0]
-                param[2][x]=hold
-            param[2]=self.calc_obj(param[2])
-            [param[:],swap]=self.rank_pop(param)
-            #if the offspring was better, i.e. swap=True
-            if swap:
-                #Change parents
-                self.pop[parent[0]]=param[0]
-                self.pop[parent[1]]=param[1]
-                #Rank population
-                self.rank_pop()
+            #making a numpy array to hold random offspring between two parents
+            param=self.pop[parent[0]]+np.random.random(self.N_dim+self.N_obj)*(self.pop[parent[1]]-self.pop[parent[0]])
+            #Rounding  to Dimensional requirements
+            param[:]=self.RoundToDim(param)
+            #Calculating objective
+            param[:]=self.CalcObj(param)
+            
+            #if the offspring is superiour than inferiour of the parents
+            if self.SuperiourityOrderIs(param,self.pop[parent[1]]):
+                #Change inferiour of the parents with child and rank whole thing
+                self.pop[parent[1]]=param
+                self.RankPop()
                 #finding first pareto
-                self.update_elite()
-                self.save_things()
+                self.UpdateElite()
+                self.SaveThings()
         
 
-    def exist(self,param,indx=None):
+    def Exist(self,param,indx=None):
         '''
         Checks if given parameter exists in population
         param
@@ -361,13 +441,13 @@ class Optim:
                 return True
         return False
             
-    def save_things(self):
+    def SaveThings(self):
         '''
         Saves the input parameters and Elite people
         Also during intialising saves un-ranked population
         as an backup if something fails
         Also keeps un-elites (and un-initialised, when data not ranked) after commented line
-        (important when calc_obj raises error while in use after initialisation)
+        (important when CalcObj raises error while in use after initialisation)
         '''
         f=open(self.filename,'w+')
         f.write(''.join(self.input_))
