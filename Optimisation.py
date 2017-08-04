@@ -3,21 +3,55 @@ import numpy as np
 import subprocess as sb
 import sys,os,copy,random,datetime, math
 
+
+def CalcObjDefault(param):
+    '''
+    Calculates objective for passed parameter using run.sh
+    arguments:
+        numpy array of size of dimension
+    returns numpy array of size of objective
+    Note: To make your own custom function:
+    1. define the function which takes in a numpy array of size (<>.N_dim,)
+    Uses the <>.N_dim indices to give <>.N_obj
+    and passes numpy array of size (<>.N_obj,)
+    This way, all other functions can access it.
+    2. <>.func=<Custom Function>
+    '''
+    try:
+        out=sb.run(['./run.sh']+(list(map(str,param))),stdout=sb.PIPE).stdout.decode('utf-8')
+        param_out=np.array(list(map(float,out.split())))
+    except ValueError as error:
+        with open("Calc_error.log",'a') as f:
+            f.write('## '+str(datetime.datetime.now())+'\n')
+            f.write("Input:"+"\n"+" ".join(list(map(str,param[:self.N_dim].tolist())))+"\n")
+            f.write("Output:"+"\n"+out+"\n")
+        raise ValueError("Error in CalcObjDefault; check Calc_error.log:"+error.args[0])
+    return param_out
+
 class Optim:
     '''
     Generates object with a population set and all data.
     Input: <input data file name>,
             [<Type of algorithm, default="GeneticAl">], 
             [<Size of population, default=500 for GeneticAl and No. of dim +1 for Simplex>]
+            [<Custom function>]
+    Custom function, default=CalcObjDefault (The one that uses run.sh)
+    To make your own custom function:
+    1. define the function which takes in an object and a numpy array of size (<>.N_dim+<>.N_obj,)
+    Use the first <>.N_dim indices to give <>.N_obj
+    and pass numpy array of size (<>.N_dim+<>.N_obj,)
+    This way, all other functions can access it.
+    2. <>.CalcObj=<Custom Function> (__init__ does it automatically if passed)
     Attributes:
     InitPop
     '''
     
     algo_list=["GeneticAl","Simplex"]
     
-    def __init__(self,data_file,algo="GeneticAl",N_pop=None):
+    def __init__(self,data_file,algo="GeneticAl",N_pop=None,func=CalcObjDefault):
         
         self.algo=algo
+        self.func=func
         
         if not self.algo in self.algo_list:
             print(" {0} not supported \n Supported Algorithms: {1}".format(algo,algo_set))
@@ -102,7 +136,7 @@ class Optim:
         self.InitPop(range(self.N_elite,self.N_pop))
         
         print (" Calculating objectives")
-        self.CalcObjMulti(range(self.N_elite,self.N_pop))
+        self.CalcObjIndx(range(self.N_elite,self.N_pop))
         
         print (" Ranking population")
         self.RankPop()
@@ -131,7 +165,7 @@ class Optim:
             if loop == max_loop-1:
                 raise RuntimeError(" Houston we got a problem: It seems the Dimension requirements don't allow random {0} population easily".format(self.N_pop))
           
-    def CalcObjMulti(self,indx=None):
+    def CalcObjIndx(self,indx=None):
         '''
         Calculates objective for self.pop for index provided
         argument:
@@ -148,26 +182,25 @@ class Optim:
             #Population not ranked since it is used for initialisation; population with objective missing exist
             #self.RankPop()
             self.SaveThings()
-
+            
     def CalcObj(self,param):
         '''
         Calculates objective for passed parameter
         arguments:
             numpy array of size of dimension (or population set starting with dimensions)
         Note: To make your own custom function:
-        1. define the function which takes in a numpy array of size (<>.N_dim+<>.N_obj,)
-        Use the first <>.N_dim indices to give <>.N_obj
-        and pass numpy array of size (<>.N_dim+<>.N_obj,)
+        1. define the function which takes in a numpy array of size (<>.N_dim,)
+        Uses the <>.N_dim indices to give <>.N_obj
+        and passes numpy array of size (<>.N_obj,)
         This way, all other functions can access it.
-        2. <>.CalcObj=<Custom Function>
+        2. <>.func=<Custom Function>
         '''
+        if param.size < self.N_dim:
+            raise ValueError("Input numpy array size < N_dim(={0})".format(self.N_dim))
+        param_out=np.zeros(self.N_dim+self.N_obj)
+        param_out[:self.N_dim]=param[:self.N_dim]
         try:
-            if param.size < self.N_dim:
-                raise ValueError("Input numpy array size < N_dim(={0})".format(self.N_dim))
-            out=sb.run(['./run.sh']+(list(map(str,param[:self.N_dim]))),stdout=sb.PIPE).stdout.decode('utf-8')
-            param_out=np.zeros(self.N_dim+self.N_obj)
-            param_out[:self.N_dim]=param[:self.N_dim]
-            hold=np.array(list(map(float,out.split())))
+            hold=self.func(param[:self.N_dim])
             #Changing target based objective to abs(error)
             for j in range(self.N_obj):
                 #if <Type> ==0, replace obj with abs(obj-<Target>)
@@ -180,7 +213,7 @@ class Optim:
                 f.write('## '+str(datetime.datetime.now())+'\n')
                 f.write("Input:"+"\n"+" ".join(list(map(str,param[:self.N_dim].tolist())))+"\n")
                 f.write("Output:"+"\n"+out+"\n")
-            raise ValueError("::Error in CalcObj; check Calc_error.log::"+error.args[0])
+            raise ValueError("Error in <>.CalcObj; check Calc_error.log:"+error.args[0])
     
     def SuperiourityOrderIs(self,param1=None,param2=None):
         '''
@@ -346,8 +379,8 @@ class Optim:
                             
                         else: #contraction not useful, shrinking
                             for i in range(1,self.N_pop):
-                                self.pop[i]+=sigma*(self.pop[0]-self.pop[i])
-                            self.CalcObjMulti(range(1,self.N_pop))
+                                self.pop[i]+=self.RoundToDim(sigma*(self.pop[0]-self.pop[i]))
+                            self.CalcObjIndx(range(1,self.N_pop))
                             #print("shrink")
                                 
                     else: #Inside contraction case
@@ -363,8 +396,8 @@ class Optim:
                             
                         else: #contraction not useful, shrinking
                             for i in range(1,self.N_pop):
-                                self.pop[i]+=sigma*(self.pop[0]-self.pop[i])
-                            self.CalcObjMulti(range(1,self.N_pop))
+                                self.pop[i]+=self.RoundToDim(sigma*(self.pop[0]-self.pop[i]))
+                            self.CalcObjIndx(range(1,self.N_pop))
                             #print("shrink")
                                 
             #Ranking and saving
