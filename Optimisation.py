@@ -12,7 +12,7 @@ def CalcObjDefault(param):
     returns numpy array of size of objective
     Note: To make your own custom function:
     1. define the function which takes in a numpy array of size (<>.N_dim,)
-    Uses the <>.N_dim indices to give <>.N_obj
+    Uses the <>.N_dim indices to give <>.N_obj 
     and passes numpy array of size (<>.N_obj,)
     This way, all other functions can access it.
     2. <>.func=<Custom Function>
@@ -32,16 +32,16 @@ class Optim:
     '''
     Generates object with a population set and all data.
     Input: <input data file name>,
-            [<Type of algorithm, default="GeneticAl">], 
-            [<Size of population, default=500 for GeneticAl and No. of dim +1 for Simplex>]
-            [<Custom function>]
+            [algo=<Type of algorithm, default="GeneticAl">], 
+            [N_pop=<Size of population, default=500 for GeneticAl and No. of dim +1 for Simplex>]
+            [func=<Custom function>]
     Custom function, default=CalcObjDefault (The one that uses run.sh)
     To make your own custom function:
-    1. define the function which takes in an object and a numpy array of size (<>.N_dim+<>.N_obj,)
-    Use the first <>.N_dim indices to give <>.N_obj
-    and pass numpy array of size (<>.N_dim+<>.N_obj,)
+    1. define the function which takes in an object and a numpy array of size (<>.N_dim,)
+    Use the <>.N_dim indices to give <>.N_obj
+    and pass numpy array of size (<>.N_obj,)
     This way, all other functions can access it.
-    2. <>.CalcObj=<Custom Function> (__init__ does it automatically if passed)
+    2. <>.func=<Custom Function> (__init__ does it automatically if function passed)
     Attributes:
     InitPop
     '''
@@ -54,7 +54,7 @@ class Optim:
         self.func=func
         
         if not self.algo in self.algo_list:
-            print(" {0} not supported \n Supported Algorithms: {1}".format(algo,algo_set))
+            print(" {} not supported \n Supported Algorithms: {}".format(algo,algo_set))
             return None
         
         self.filename=data_file
@@ -89,15 +89,21 @@ class Optim:
             self.P_dim=np.zeros((self.N_dim,3))
             self.P_dim[:]=np.array([list(map(float,x.split()[:3])) for x in self.input_[ind_dim+1:ind_dim+self.N_dim+1]])
             
-            # parameters for Objective: <Type> <Target> <Margin> <Tier>
-            #Type = -1,1,0 for min, max, target respectively
-            #Target= target value, else 0 for max and min type
-            P_obj=np.zeros((self.N_obj,4))
+            # parameters for Objective: <Type> <Target> <Tolerance> <Tier>
+            #P_obj:
+            #[0] :: Type = 1,-1,0 for min, max, target respectively
+            #[1] :: Target= target value, else 0 for max and min type
+            #[2] :: Tolerance
+            P_obj=np.zeros((self.N_obj,3))
+            #Tier, dictionary of tiers as keys and list of index for corresponding tier as their values
+            self.tier={}
             for i in range(self.N_obj):
                 line=self.input_[ind_obj+1+i].split()
                 P_obj[i][0]=(-1 if line[0].lower() == "max" else (1 if line[0].lower() == "min" else 0))
                 P_obj[i][1]=(float(line[0]) if P_obj[i][0] == 0  else 0)
-                P_obj[i][2:4]=np.array(list(map(float,line[1:3])))
+                P_obj[i][2]=float(line[1])
+                tier_i=float(line[2])
+                self.tier[tier_i]=self.tier.get(tier_i,[])+[i]
             self.P_obj=P_obj
         except ValueError as error:
             raise ValueError(":Error while reading input data:"+error.args[0])
@@ -125,7 +131,7 @@ class Optim:
                     self.N_elite-=1
                 else:
                     indx+=1
-            print (" {0} elites found".format(self.N_elite))
+            print (" {} elites found".format(self.N_elite))
         
         #Adjusting N_elite to contain entire population for Simplx
         #Facilitates easy saving with same functions for genetic algo
@@ -163,7 +169,7 @@ class Optim:
                     self.pop[i][:self.N_dim]=hold
                     break
             if loop == max_loop-1:
-                raise RuntimeError(" Houston we got a problem: It seems the Dimension requirements don't allow random {0} population easily".format(self.N_pop))
+                raise RuntimeError(" Houston we got a problem: It seems the Dimension requirements don't allow random {} population easily".format(self.N_pop))
           
     def CalcObjIndx(self,indx=None):
         '''
@@ -175,6 +181,7 @@ class Optim:
         '''
         if indx is None: indx=range(self.N_pop)
         for i in indx:
+            if os.path.isfile('STOP'): sys.exit() #Failsafe
             self.pop[i]=self.CalcObj(self.pop[i])
             #if not ranked, N_elite is trivial, updated to save all CalcObj calculated population
             if not self.ranked:
@@ -196,7 +203,7 @@ class Optim:
         2. <>.func=<Custom Function>
         '''
         if param.size < self.N_dim:
-            raise ValueError("Input numpy array size < N_dim(={0})".format(self.N_dim))
+            raise ValueError("Input numpy array size < N_dim(={})".format(self.N_dim))
         param_out=np.zeros(self.N_dim+self.N_obj)
         param_out[:self.N_dim]=param[:self.N_dim]
         try:
@@ -223,38 +230,33 @@ class Optim:
         Uses hard ranking (Pareto method), i.e. ALL (not maximum) objectives for same tier should be superiour
         '''
         if param1 is None and param2 is None:
-            raise TypeError("swapped takes 2 arguments")
+            raise TypeError("SuperiourityOrderIs() takes 2 arguments")
         elif param1.size != self.N_dim+self.N_obj and param2.size != self.N_dim+self.N_obj:
-            raise ValueError("param1 and param2 should be numpy array of size {0}, but {1} and {2} were given,respectively".format(self.N_dim+self.N_obj,param1.size,param2.size))
-        #getting tiers with indices
-        tier={}
-        for i in range(self.N_obj):
-            tier[self.P_obj[i][3]]=tier.get(self.P_obj[i][3],[])+[i]
-        tier_list=list(tier.keys())
-        tier_list.sort()
+            raise ValueError("param1 and param2 should be numpy array of size {}, but {} and {} were given,respectively".format(self.N_dim+self.N_obj,param1.size,param2.size))
+        
         obj1=param1[-1*self.N_obj:]
         obj2=param2[-1*self.N_obj:]
-        for i in tier_list:
+        for i in sorted(list(self.tier.keys())):
             #for each tier list, we use hard ranking (Pareto method), i.e. ALL (not maximum) objectives in same tier should be superiour 
             x=0
-            for j in tier[i]:
+            for j in self.tier[i]:
                 #if obj1's j th objective is not superiour to obj2's, then break
-                if not (obj1[j]-obj2[j])*(-1 if self.P_obj[j][0]==-1 else 1) < self.P_obj[j][2]: 
+                if not (obj2[j]-obj1[j])*(-1 if self.P_obj[j][0]==-1 else 1) > self.P_obj[j][2]: 
                     break
                 x+=1
-            if x==len(tier[i]): return True #if the loop above didn't break prematurely, then obj1 is superiour
-            #Now obj2 is either equal or superiour to obj1
+            if x==len(self.tier[i]): return True #if the loop above didn't break prematurely, then obj1 is superiour
+            #Here, obj2 is either equal or superiour to obj1
             #Checking if obj1 is equal to obj2, only then heading to tier below
             x=0
-            for j in tier[i]:
+            for j in self.tier[i]:
                 #if obj2's j th objective is not superiour to obj1's, then break
-                if not (obj2[j]-obj1[j])*(-1 if self.P_obj[j][0]==-1 else 1) < self.P_obj[j][2]: 
+                if not (obj1[j]-obj2[j])*(-1 if self.P_obj[j][0]==-1 else 1) > self.P_obj[j][2]: 
                     break
                 x+=1
-            if x==len(tier[i]): return False #if the loop above didn't break prematurely, then obj2 is superiour
-            #Now obj1 is equal to obj2
+            if x==len(self.tier[i]): return False #if the loop above didn't break prematurely, then obj2 is superiour
+            #Here, obj1 is equal to obj2
             #Heading to tier below
-        #Now, all tiers are checked and obj1 is still equal to obj2
+        #Here, all tiers are checked and obj1 is still equal to obj2
         return False
 
     def RankPop(self,param=None):
@@ -305,7 +307,7 @@ class Optim:
     
     def SimplexCrawl(self,iter_=1,alpha=1,gamma=2,rho=0.5,sigma=0.5):
         '''
-        Makes the simplex crawl using Nelder–Mead method
+        Makes the simplex crawl using Nelder-Mead method
         Parameters passed: 
         iter_, default=1, number of crawls
         alpha, default=1, reflection coefficients
@@ -315,15 +317,15 @@ class Optim:
         
         Refrences:
         https://en.wikipedia.org/wiki/Nelder-Mead_method
-        McKinnon, K.I.M. "Convergence of the Nelder–Mead simplex method to a non-stationary point". SIAM J Optimization
+        McKinnon, K.I.M. "Convergence of the Nelder-Mead simplex method to a non-stationary point". SIAM J Optimization
         '''
         if self.algo !=self.algo_list[1]:
-            raise RuntimeError("{0} algorithm does not work with method: SimplexCrawl".format(self.algo))
+            raise RuntimeError("{} algorithm does not work with method: SimplexCrawl".format(self.algo))
         #Asserting proper parameters
-        assert alpha>0,"alpha > 0, given alpha={0}".format(alpha)
-        assert gamma>1,"gamma > 1, given gamma={0}".format(gamma)
-        assert 0<rho<=0.5,"0<rho<=0.5, given rho={0}".format(rho)
-        assert sigma>0,"sigma > 0, given sigma={0}".format(sigma)
+        assert alpha>0,"alpha > 0, given alpha={}".format(alpha)
+        assert gamma>1,"gamma > 1, given gamma={}".format(gamma)
+        assert 0<rho<=0.5,"0<rho<=0.5, given rho={}".format(rho)
+        assert sigma>0,"sigma > 0, given sigma={}".format(sigma)
         
         centroid=np.zeros(self.N_dim+self.N_obj)
         reflection=np.zeros(self.N_dim+self.N_obj)
@@ -340,14 +342,14 @@ class Optim:
             
             #Calculating objective for corresponding point
             reflection[:]=self.CalcObj(reflection)
-            #print ("reflection:{0}".format(reflection))
+            #print ("reflection:{}".format(reflection))
             
             if not self.SuperiourityOrderIs(self.pop[0],reflection): #reflection is better or equal to rank 0, testing expansion
                 #expansion point, modelled to Dimension requirements
                 expansion=self.RoundToDim(centroid+gamma*(reflection-centroid))
                 #Calculating objective for corresponding point
                 expansion[:]=self.CalcObj(expansion)
-                #print ("expansion:{0}".format(expansion))
+                #print ("expansion:{}".format(expansion))
                 
                 if not self.SuperiourityOrderIs(self.pop[0],expansion): #Expansion usefull
                     #Take expansion to best rank 0, so the simplex can crawl on plateaus
@@ -372,16 +374,15 @@ class Optim:
                         contraction=self.RoundToDim(centroid+rho*(centroid-self.pop[-1]))
                         #Calculating objective for corresponding point
                         contraction[:]=self.CalcObj(contraction)
-                        #print ("out contraction:{0}".format(contraction))
+                        #print ("out contraction:{}".format(contraction))
                         
                         if not self.SuperiourityOrderIs(reflection,contraction): #Contraction usefull
                             self.pop[-1]=contraction
                             
                         else: #contraction not useful, shrinking
                             for i in range(1,self.N_pop):
-                                self.pop[i]+=self.RoundToDim(sigma*(self.pop[0]-self.pop[i]))
+                                self.pop[i]=self.RoundToDim(self.pop[i]+sigma*(self.pop[0]-self.pop[i]))
                             self.CalcObjIndx(range(1,self.N_pop))
-                            #print("shrink")
                                 
                     else: #Inside contraction case
                     
@@ -389,16 +390,15 @@ class Optim:
                         contraction=self.RoundToDim(centroid+rho*(self.pop[-1]-centroid))
                         #Calculating objective for corresponding point
                         contraction[:]=self.CalcObj(contraction)
-                        #print ("in contraction:{0}".format(contraction))
+                        #print ("in contraction:{}".format(contraction))
                         
                         if self.SuperiourityOrderIs(contraction,self.pop[-1]): #Contraction usefull
                             self.pop[-1]=contraction
                             
                         else: #contraction not useful, shrinking
                             for i in range(1,self.N_pop):
-                                self.pop[i]+=self.RoundToDim(sigma*(self.pop[0]-self.pop[i]))
+                                self.pop[i]=self.RoundToDim(self.pop[i]+sigma*(self.pop[0]-self.pop[i]))
                             self.CalcObjIndx(range(1,self.N_pop))
-                            #print("shrink")
                                 
             #Ranking and saving
             self.RankPop()
@@ -412,7 +412,7 @@ class Optim:
         if param is None:
             raise TypeError("Takes one parameter")
         elif param.size < self.N_dim:
-            raise ValueError("size of parameter less than N_dim (= {0})".format(self.N_dim))
+            raise ValueError("size of parameter less than N_dim (= {})".format(self.N_dim))
         for i in range(self.N_dim):
             #Checking if not lower than min
             param[i]=max(self.P_dim[i][0],param[i])
@@ -427,8 +427,10 @@ class Optim:
             
         
     def Mutate(self,iter_=1):
+        if self.algo !=self.algo_list[0]:
+            raise RuntimeError("{} algorithm does not work with method: Mutate".format(self.algo))
         if self.N_pop<2:
-            raise ValueError("Number of population (={0}) not enough to choose two parents".format(self.N_pop))
+            raise ValueError("Number of population (={}) not enough to choose two parents".format(self.N_pop))
         parent=[0,0]
         for ii in range(iter_):
             if os.path.isfile('STOP'): sys.exit() #Failsafe
@@ -484,7 +486,7 @@ class Optim:
         '''
         f=open(self.filename,'w+')
         f.write(''.join(self.input_))
-        f.write('ELITE {0} (Data {1}ranked)\n'.format(self.N_elite,('' if self.ranked else 'not ')))
+        f.write('ELITE {} (Data {}ranked)\n'.format(self.N_elite,('' if self.ranked else 'not ')))
         #Saving elite first
         for i in range(self.N_elite):
             f.write(' '.join(map(str,self.pop[i].tolist()))+'\n')
@@ -510,7 +512,7 @@ def parameter_in(input_):
     # parameters for Dimension: <Min> <Max> <Increment>
     P_dim=np.array([list(map(float,x.split()[:3])) for x in input_[ind_dim+1:ind_dim+N_dim+1]])
     
-    # parameters for Objective: <Type> <Target> <Margin> <Tier>
+    # parameters for Objective: <Type> <Target> <Tolerance> <Tier>
     P_obj=np.zeros((N_obj,4))
     for i in range(N_obj):
         line=input_[ind_obj+1+i].split()
